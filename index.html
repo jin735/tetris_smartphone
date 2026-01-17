@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Tetris - 스마트폰용 컨트롤 추가</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body {
+      background: #111;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      color: white;
+      font-family: sans-serif;
+      flex-direction: column;
+      margin: 0;
+      gap: 8px;
+    }
+    #score {
+      font-size: 20px;
+      color: white;
+      margin-top: 6px;
+    }
+    .board {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas {
+      border: 2px solid #555;
+      background: #0077FF; /* 배경 파란색 */
+      touch-action: none;
+      display: block;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      align-items: center;
+      margin-top: 6px;
+      flex-wrap: nowrap;
+    }
+    .btn {
+      background: rgba(255,255,255,0.06);
+      color: white;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 18px;
+      user-select: none;
+      -webkit-user-select: none;
+      min-width: 48px;
+      text-align: center;
+      box-shadow: 0 2px 0 rgba(0,0,0,0.4);
+    }
+    .btn:active { transform: translateY(1px); }
+    /* make mobile buttons a bit larger on small screens */
+    @media (max-width:420px){
+      .btn { padding: 12px 16px; font-size: 20px; min-width:56px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="score">SCORE: 0</div>
+  <div class="board">
+    <canvas id="tetris" width="240" height="400"></canvas>
+  </div>
+
+  <!-- 모바일용 방향키 -->
+  <div class="controls" aria-hidden="false">
+    <button class="btn" id="left">◀</button>
+    <button class="btn" id="rotate">⟳</button>
+    <button class="btn" id="right">▶</button>
+    <button class="btn" id="down">▼</button>
+    <button class="btn" id="drop">⇩</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("tetris");
+    const ctx = canvas.getContext("2d");
+
+    const BLOCK_SIZE = 20; // 픽셀 단위 블록 크기
+    const scoreEl = document.getElementById("score");
+
+    const arena = createMatrix(12, 20);
+    const player = { pos:{x:0,y:0}, matrix:null, score:0 };
+
+    let dropCounter = 0;
+    let dropInterval = 1000;
+    let lastTime = 0;
+    let shakeAmount = 0;
+
+    // 블록 모양 (템플릿, 직접 변경하지 않음)
+    const PIECES = [
+      [[0,0,0],[1,1,1],[0,1,0]], // T
+      [[2,2],[2,2]], // O
+      [[0,3,0],[0,3,0],[0,3,3]], // L
+      [[0,4,0],[0,4,0],[4,4,0]], // J
+      [[0,5,0,0],[0,5,0,0],[0,5,0,0],[0,5,0,0]], // I
+      [[0,6,6],[6,6,0],[0,0,0]], // S
+      [[7,7,0],[0,7,7],[0,0,0]]  // Z
+    ];
+
+    // 랜덤 색상 생성
+    const colors = [null];
+    for(let i=1;i<=7;i++){ 
+      colors.push('#'+Math.floor(Math.random()*16777215).toString(16).padStart(6,'0'));
+    }
+
+    function createMatrix(w,h){ const m=[]; while(h--) m.push(new Array(w).fill(0)); return m; }
+
+    // 클론하여 템플릿이 변경되지 않도록 함
+    function cloneMatrix(m){ return m.map(row => row.slice()); }
+
+    function collide(arena,player){
+      const m=player.matrix,o=player.pos;
+      for(let y=0;y<m.length;y++){
+        for(let x=0;x<m[y].length;x++){
+          if(m[y][x]!==0 && (arena[y+o.y] && arena[y+o.y][x+o.x])!==0) return true;
+          // out of bounds on left/top/right should also count as collision
+          if(m[y][x]!==0){
+            const ay = y + o.y;
+            const ax = x + o.x;
+            if(ax < 0 || ax >= arena[0].length || ay >= arena.length) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function merge(arena,player){
+      player.matrix.forEach((row,y)=>{
+        row.forEach((value,x)=>{
+          if(value!==0) arena[y+player.pos.y][x+player.pos.x]=value;
+        });
+      });
+    }
+
+    function rotate(matrix){
+      for(let y=0;y<matrix.length;y++){
+        for(let x=0;x<y;x++){ 
+          [matrix[x][y],matrix[y][x]]=[matrix[y][x],matrix[x][y]];
+        }
+      }
+      matrix.forEach(row=>row.reverse());
+    }
+
+    function playerDrop(){
+      player.pos.y++;
+      if(collide(arena,player)){
+        player.pos.y--;
+        merge(arena,player);
+        const linesCleared = arenaSweep();
+        if(linesCleared>0) shakeAmount = Math.min(5,linesCleared*2);
+        playerReset();
+      }
+      dropCounter=0;
+    }
+
+    function arenaSweep(){
+      let linesCleared=0;
+      outer:for(let y=arena.length-1;y>=0;y--){
+        for(let x=0;x<arena[y].length;x++){
+          if(arena[y][x]===0) continue outer;
+        }
+        arena.splice(y,1);
+        arena.unshift(new Array(12).fill(0));
+        linesCleared++;
+        y++;
+      }
+      if(linesCleared>0){
+        player.score += linesCleared*10; // 1줄 10점
+        updateSpeed();
+        updateScore();
+      }
+      return linesCleared;
+    }
+
+    function updateSpeed(){
+      const level = Math.floor(player.score / 20);
+      dropInterval = Math.max(100, 1000 - level*100);
+    }
+
+    function updateScore(){
+      scoreEl.textContent = "SCORE: "+player.score;
+    }
+
+    function playerReset(){
+      // 클론하여 PIECES 템플릿이 회전 등으로 변경되지 않도록 함
+      player.matrix = cloneMatrix(PIECES[Math.floor(Math.random()*PIECES.length)]);
+      player.pos.y = 0;
+      player.pos.x = Math.floor(arena[0].length/2 - player.matrix[0].length/2);
+      if(collide(arena,player)){
+        arena.forEach(row=>row.fill(0));
+        player.score=0;
+        updateScore();
+        updateSpeed();
+      }
+    }
+
+    function drawMatrix(matrix, offset){
+      matrix.forEach((row,y)=>{
+        row.forEach((value,x)=>{
+          if(value!==0){
+            ctx.fillStyle=colors[value] || '#ffffff';
+            ctx.fillRect(
+              (x+offset.x)*BLOCK_SIZE,
+              (y+offset.y)*BLOCK_SIZE,
+              BLOCK_SIZE,
+              BLOCK_SIZE
+            );
+          }
+        });
+      });
+    }
+
+    function draw(){
+      ctx.save();
+      if(shakeAmount>0){
+        const shakeX = Math.random()*shakeAmount - shakeAmount/2;
+        const shakeY = Math.random()*shakeAmount - shakeAmount/2;
+        ctx.translate(shakeX,shakeY);
+        shakeAmount*=0.9;
+        if(shakeAmount<0.1) shakeAmount=0;
+      }
+
+      ctx.fillStyle="#0077FF"; // 배경 파란색
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      drawMatrix(arena,{x:0,y:0});
+      if(player.matrix) drawMatrix(player.matrix,player.pos);
+
+      ctx.restore();
+    }
+
+    function update(time=0){
+      const deltaTime = time-lastTime;
+      lastTime=time;
+      dropCounter+=deltaTime;
+      if(dropCounter>dropInterval) playerDrop();
+      draw();
+      requestAnimationFrame(update);
+    }
+
+    // 키보드 컨트롤 (기존)
+    document.addEventListener("keydown", event=>{
+      if(event.key==="ArrowLeft"){ player.pos.x--; if(collide(arena,player)) player.pos.x++; }
+      else if(event.key==="ArrowRight"){ player.pos.x++; if(collide(arena,player)) player.pos.x--; }
+      else if(event.key==="ArrowDown") playerDrop();
+      else if(event.key===" ") { while(!collide(arena,player)) player.pos.y++; player.pos.y--; playerDrop(); }
+      else if(event.key==="ArrowUp") rotate(player.matrix);
+    });
+
+    // 버튼에 동작 연결 (마우스/터치 지원)
+    function bindControl(id, handler){
+      const el = document.getElementById(id);
+      if(!el) return;
+      const act = (e) => { e.preventDefault(); handler(); };
+      el.addEventListener('mousedown', act);
+      el.addEventListener('touchstart', act, {passive:false});
+    }
+
+    bindControl('left', ()=>{ player.pos.x--; if(collide(arena,player)) player.pos.x++; });
+    bindControl('right', ()=>{ player.pos.x++; if(collide(arena,player)) player.pos.x--; });
+    bindControl('rotate', ()=>{ rotate(player.matrix); /* 간단 회전: 벽에 걸리면 회전 후 원복 처리 원하면 추가 구현 */ });
+    bindControl('down', ()=>{ playerDrop(); });
+    bindControl('drop', ()=>{ while(!collide(arena,player)) player.pos.y++; player.pos.y--; playerDrop(); });
+
+    // 간단한 스와이프 지원 (모바일에서 좌우 이동/아래로 스와이프 = 빠르게 내리기, 위로 스와이프 = 회전)
+    (function addSwipe(){
+      let startX=0, startY=0, startT=0;
+      canvas.addEventListener('touchstart', (e)=>{
+        const t = e.touches[0];
+        startX = t.clientX; startY = t.clientY; startT = Date.now();
+      }, {passive:true});
+      canvas.addEventListener('touchend', (e)=>{
+        const t = e.changedTouches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        const dt = Date.now() - startT;
+        if(Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy)){
+          if(dx > 0){ player.pos.x++; if(collide(arena,player)) player.pos.x--; }
+          else { player.pos.x--; if(collide(arena,player)) player.pos.x++; }
+        } else if(dy > 30 && dt < 500){
+          playerDrop();
+        } else if(dy < -30 && dt < 500){
+          rotate(player.matrix);
+        }
+      }, {passive:true});
+    })();
+
+    // 시작
+    playerReset();
+    updateSpeed();
+    updateScore();
+    update();
+
+  </script>
+</body>
+</html>
